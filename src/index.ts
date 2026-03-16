@@ -1,4 +1,6 @@
 import PostalMime from 'postal-mime';
+import { EmailMessage } from "cloudflare:email";
+import { env, WorkerEntrypoint } from "cloudflare:workers";
 
 export interface Env {
   ACTIVE_EMAILS: KVNamespace;
