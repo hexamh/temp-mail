@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 # ── Custom routes (serve API on your domain) ─────────────────
 routes = [
   { pattern = "tempmail.drkingbd.cc/*",      zone_name = "drkingbd.cc"      },
-  { pattern = "tempmail.mail.drkingbd.cc/*", zone_name = "mail.drkingbd.cc" },
+  { pattern = "mail.drkingbd.cc/*", zone_name = "mail.drkingbd.cc" },
 ]
 
 # ── Scheduled cleanup every 5 minutes ─────────────────────────
