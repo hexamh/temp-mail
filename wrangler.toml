@@ -1,0 +1,29 @@
+name = "temp"
+main = "src/index.ts"
+compatibility_flags = [ "nodejs_compat" ]
+# Set this to today's date
+compatibility_date = "2026-03-16"
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "ACTIVE_EMAILS"
+id = "305bed38102e467b9fd28b79c608b30e"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "temp"
+database_id = "85a32f88-865b-49a5-b18d-521c334ba38c"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "mail-storage"
+
+[[durable_objects.bindings]]
+name = "NOTIFIER"
+class_name = "EmailNotifierDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "MyDurableObject" ]
