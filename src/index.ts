@@ -1,7 +1,3 @@
-// ============================================================
-// index.ts – TempMail Worker entry point
-// ============================================================
-
 import type { Env } from './types';
 import { handleEmail }     from './email-handler';
 import { handleFetch }     from './api';
