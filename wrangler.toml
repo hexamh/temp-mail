@@ -1,29 +1,49 @@
-name = "temp"
-main = "src/index.ts"
-compatibility_flags = [ "nodejs_compat" ]
-# Set this to today's date
-compatibility_date = "2026-03-16"
+name       = "tempmail"
+main       = "src/index.ts"
+account_id = "a4f1ce2376e901147e4ec2667d6dc094"
 
-[observability]
-enabled = true
+# Workers compatibility
+compatibility_date  = "2026-03-16"
+compatibility_flags = ["nodejs_compat"]
 
-[[kv_namespaces]]
-binding = "ACTIVE_EMAILS"
-id = "305bed38102e467b9fd28b79c608b30e"
+# ── Custom routes (serve API on your domain) ─────────────────
+routes = [
+  { pattern = "tempmail.drkingbd.cc/*",      zone_name = "drkingbd.cc"      },
+  { pattern = "tempmail.mail.drkingbd.cc/*", zone_name = "mail.drkingbd.cc" },
+]
 
+# ── Scheduled cleanup every 5 minutes ─────────────────────────
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ── D1 Database ───────────────────────────────────────────────
 [[d1_databases]]
-binding = "DB"
+binding      = "TEMPMAIL_DB"
 database_name = "temp"
-database_id = "85a32f88-865b-49a5-b18d-521c334ba38c"
+database_id  = "85a32f88-865b-49a5-b18d-521c334ba38c"
 
+# ── KV Namespace ──────────────────────────────────────────────
+[[kv_namespaces]]
+binding    = "TEMPMAIL_KV"
+id         = "305bed38102e467b9fd28b79c608b30e"
+preview_id = "305bed38102e467b9fd28b79c608b30e"
+
+# ── R2 Bucket ─────────────────────────────────────────────────
 [[r2_buckets]]
-binding = "ATTACHMENTS"
+binding     = "TEMPMAIL_ATTACHMENTS"
 bucket_name = "mail-storage"
 
-[[durable_objects.bindings]]
-name = "NOTIFIER"
-class_name = "EmailNotifierDO"
+# ── Environment variables ─────────────────────────────────────
+[vars]
+ALLOWED_DOMAINS    = "mail.drkingbd.cc,drkingbd.cc"
+INBOX_TTL_SECONDS  = "600"              # 10 minutes
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = [ "EmailNotifierDO" ]
+# ── Email Routing catch-all (both zones) ──────────────────────
+# NOTE: These are configured in the Cloudflare dashboard, not wrangler.
+# For drkingbd.cc      → Email Routing → Settings → Catch-all → Send to Worker → tempmail-worker
+# For mail.drkingbd.cc → Email Routing → Settings → Catch-all → Send to Worker → tempmail-worker
+# The screenshots confirm email-agent (this worker) is already wired up.
+
+# ── Production environment overrides ─────────────────────────
+[env.production]
+vars = { ALLOWED_DOMAINS = "mail.drkingbd.cc,drkingbd.cc", INBOX_TTL_SECONDS = "600" }
