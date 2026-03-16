@@ -6,12 +6,6 @@ account_id = "a4f1ce2376e901147e4ec2667d6dc094"
 compatibility_date  = "2026-03-16"
 compatibility_flags = ["nodejs_compat"]
 
-# ── Custom routes (serve API on your domain) ─────────────────
-routes = [
-  { pattern = "tempmail.drkingbd.cc/*",      zone_name = "drkingbd.cc"      },
-  { pattern = "mail.drkingbd.cc/*", zone_name = "mail.drkingbd.cc" },
-]
-
 # ── Scheduled cleanup every 5 minutes ─────────────────────────
 [triggers]
 crons = ["*/5 * * * *"]
