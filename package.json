@@ -3,19 +3,13 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy",
+		"deploy": "wrangler types && wrangler deploy",
 		"start": "wrangler dev",
 		"dev": "wrangler dev",
 		"cf-typegen": "wrangler types"
 	},
 	"dependencies": {
-	"@cloudflare/ai-chat": "^0.1.8",
-	"agents": "^0.7.5",
-	"hono-agents": "^3.0.7",
-	"ai": "^6.0.116",
-	"grammy": "^1.41.1",
-	"workers-ai-provider": "^3.1.2",
-    "hono": "^4.12.7"
+	"postal-mime": "latest"
   },
 	"devDependencies": {
 		"@types/node": "^25.4.0",
