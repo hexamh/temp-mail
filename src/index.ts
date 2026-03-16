@@ -1,6 +1,5 @@
 import PostalMime from 'postal-mime';
-import { EmailMessage } from "cloudflare:email";
-import { env, WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 
 export interface Env {
   ACTIVE_EMAILS: KVNamespace;
@@ -12,12 +11,12 @@ export interface Env {
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': '*',
 };
 
 export default {
   /**
-   * HTTP REST API for the Flutter Application
+   * HTTP REST API for the Client Application
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') {
@@ -33,14 +32,13 @@ export default {
         crypto.getRandomValues(buffer);
         const prefix = Array.from(buffer, (b) => b.toString(16).padStart(2, '0')).join('');
         
-        // IMPORTANT: Replace with your actual domain configured in Cloudflare Email Routing
-        const domain = 'temp.yourdomain.com'; 
+        const domain = 'drkingbd.cc'; 
         const address = `${prefix}@${domain}`;
 
         // Store in KV with exactly 10 minutes (600 seconds) TTL
         await env.ACTIVE_EMAILS.put(address, 'active', { expirationTtl: 600 });
 
-        const wsUrl = url.protocol === 'https:' 
+        const ws_url = url.protocol === 'https:' 
           ? `wss://${url.host}/api/ws/${address}` 
           : `ws://${url.host}/api/ws/${address}`;
 
@@ -56,7 +54,6 @@ export default {
           return new Response('Email address expired or invalid', { status: 403, headers: CORS_HEADERS });
         }
 
-        // Route to Durable Object responsible for this address
         const doId = env.NOTIFIER.idFromName(address);
         const stub = env.NOTIFIER.get(doId);
         return stub.fetch(request);
@@ -66,27 +63,23 @@ export default {
       if (request.method === 'GET' && url.pathname.startsWith('/api/inbox/')) {
         const address = url.pathname.replace('/api/inbox/', '');
 
-        // Fetch emails
         const { results: emails } = await env.DB.prepare(
           `SELECT id, sender, subject, body_text, body_html, created_at 
            FROM emails WHERE address = ? ORDER BY created_at DESC`
         ).bind(address).all();
 
-        // Fetch related attachments
         const { results: attachments } = await env.DB.prepare(
           `SELECT id, email_id, filename, content_type, size, r2_key 
            FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE address = ?)`
         ).bind(address).all();
 
-        // Assemble payload
         const inbox = emails.map((email) => ({
           ...email,
           attachments: attachments
             .filter((att) => att.email_id === email.id)
             .map((att) => ({
                ...att,
-               // Generate a direct download URL
-               download_url: `${url.origin}/api/attachments/${att.r2_key}`
+               download_url: `${url.origin}/api/attachments/${encodeURIComponent(att.r2_key as string)}`
             })),
         }));
 
@@ -117,19 +110,17 @@ export default {
   },
 
   /**
-   * Cloudflare Email Worker - Triggered on incoming emails
+   * Cloudflare Email Worker - Triggered on incoming Catch-All emails
    */
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
     try {
-      // 1. Verify address validity via KV
+      // Reject any email not actively generated in KV (Stops spam instantly)
       const isActive = await env.ACTIVE_EMAILS.get(message.to);
       if (!isActive) {
-        // Rejecting bounces the email back. Protects against spam to inactive addresses.
         message.setReject('Address has expired or does not exist.');
         return;
       }
 
-      // 2. Parse MIME stream using PostalMime
       const rawEmailBuffer = await new Response(message.raw).arrayBuffer();
       const parser = new PostalMime();
       const parsedEmail = await parser.parse(rawEmailBuffer);
@@ -137,22 +128,21 @@ export default {
       const emailId = crypto.randomUUID();
       const now = Date.now();
 
-      // 3. Store email metadata in D1
       await env.DB.prepare(
         `INSERT INTO emails (id, address, sender, subject, body_text, body_html, created_at) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         emailId,
         message.to,
-        parsedEmail.from.address,
+        parsedEmail.from?.address || 'unknown@sender.com',
         parsedEmail.subject || '(No Subject)',
         parsedEmail.text || '',
         parsedEmail.html || '',
         now
       ).run();
 
-      // 4. Handle Attachments (R2 Storage + D1 Metadata)
-      const attachmentRecords = [];
+      const attachmentRecords: Array<Record<string, any>> = [];
+      
       if (parsedEmail.attachments && parsedEmail.attachments.length > 0) {
         const stmt = env.DB.prepare(
           `INSERT INTO attachments (id, email_id, filename, content_type, size, r2_key) 
@@ -162,7 +152,6 @@ export default {
         const batch = [];
         for (const att of parsedEmail.attachments) {
           const attId = crypto.randomUUID();
-          // Group R2 files logically
           const r2Key = `attachments/${message.to}/${emailId}/${attId}-${att.filename}`;
           
           await env.ATTACHMENTS.put(r2Key, att.content, {
@@ -181,11 +170,10 @@ export default {
         }
         
         if (batch.length > 0) {
-          await env.DB.batch(batch); // Execute D1 inserts in a single transaction
+          await env.DB.batch(batch); 
         }
       }
 
-      // 5. Notify the Flutter client via Durable Object WebSockets
       const doId = env.NOTIFIER.idFromName(message.to);
       const stub = env.NOTIFIER.get(doId);
       
@@ -193,7 +181,7 @@ export default {
         type: 'NEW_EMAIL',
         payload: {
           id: emailId,
-          sender: parsedEmail.from.address,
+          sender: parsedEmail.from?.address || 'unknown',
           subject: parsedEmail.subject,
           body_text: parsedEmail.text,
           created_at: now,
@@ -201,7 +189,6 @@ export default {
         }
       };
 
-      // Use waitUntil so we don't block the email receiver acknowledgment
       ctx.waitUntil(
         stub.fetch(new Request('http://internal/broadcast', {
           method: 'POST',
@@ -211,7 +198,6 @@ export default {
 
     } catch (error) {
       console.error('Email processing failed:', error);
-      // Let it fail gracefully or set rejection
       message.setReject('Temporary processing failure');
     }
   }
@@ -219,51 +205,38 @@ export default {
 
 /**
  * Durable Object using the modern Hibernation API.
- * Manages WebSocket connections for real-time Flutter updates without incurring idle compute charges.
  */
-export class EmailNotifierDO {
-  constructor(private state: DurableObjectState, private env: Env) {}
+export class EmailNotifierDO extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // Internal endpoint called by the Email worker handler
     if (url.pathname === '/broadcast' && request.method === 'POST') {
       const message = await request.text();
-      // Broadcast to all connected Flutter clients monitoring this specific address
-      this.state.getWebSockets().forEach((ws) => {
+      this.ctx.getWebSockets().forEach((ws) => {
         try {
           ws.send(message);
         } catch (e) {
-          // Client disconnected
+          // Ignore disconnected clients
         }
       });
       return new Response('Broadcasted', { status: 200 });
     }
 
-    // Client WebSocket Upgrade request from Flutter App
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected Upgrade: websocket', { status: 426 });
     }
 
     const { 0: client, 1: server } = new WebSocketPair();
-    
-    // Accept WebSocket using Hibernation API
-    this.state.acceptWebSocket(server);
+    this.ctx.acceptWebSocket(server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  // Required handlers for the WebSocket Hibernation API
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    // We only push data, so client messages are ignored.
-  }
-  
-  webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    ws.close(code, reason);
-  }
-  
-  webSocketError(ws: WebSocket, error: unknown) {
-    console.error('WebSocket Error:', error);
-  }
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {}
+  webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) { ws.close(code, reason); }
+  webSocketError(ws: WebSocket, error: unknown) { console.error('WebSocket Error:', error); }
 }
