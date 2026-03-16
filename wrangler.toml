@@ -36,14 +36,9 @@ bucket_name = "mail-storage"
 # ── Environment variables ─────────────────────────────────────
 [vars]
 ALLOWED_DOMAINS    = "mail.drkingbd.cc,drkingbd.cc"
-INBOX_TTL_SECONDS  = "600"              # 10 minutes
+INBOX_TTL_SECONDS  = "600"              
 
-# ── Email Routing catch-all (both zones) ──────────────────────
-# NOTE: These are configured in the Cloudflare dashboard, not wrangler.
-# For drkingbd.cc      → Email Routing → Settings → Catch-all → Send to Worker → tempmail-worker
-# For mail.drkingbd.cc → Email Routing → Settings → Catch-all → Send to Worker → tempmail-worker
-# The screenshots confirm email-agent (this worker) is already wired up.
-
+# 10 minutes
 # ── Production environment overrides ─────────────────────────
 [env.production]
 vars = { ALLOWED_DOMAINS = "mail.drkingbd.cc,drkingbd.cc", INBOX_TTL_SECONDS = "600" }
