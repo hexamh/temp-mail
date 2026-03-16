@@ -26,4 +26,4 @@ class_name = "EmailNotifierDO"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = [ "MyDurableObject" ]
+new_sqlite_classes = [ "EmailNotifierDO" ]
