@@ -1,4 +1,4 @@
-name       = "tempmail"
+name = "temp"
 main       = "src/index.ts"
 account_id = "a4f1ce2376e901147e4ec2667d6dc094"
 
