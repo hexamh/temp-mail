@@ -3,6 +3,8 @@
 <p>A high-performance, fully serverless temporary email service built on Cloudflare's Edge infrastructure.</p>
 </div>
 
+### [Join our telegram channel](https://t.me/drkingbd)
+
 ## 🚀 Overview
 
 TempMail is a production-ready, highly scalable temporary email backend. Leveraging Cloudflare's ecosystem, it processes incoming emails at the edge, stores data globally, and delivers real-time updates to clients without the need for traditional servers.
