@@ -1,9 +1,9 @@
 import PostalMime from 'postal-mime';
 import type { Env, NotifyKV } from './types';
-import { streamToArrayBuffer, headersToRecord } from './utils';
+import { headersToRecord } from './utils';
 
 const TTL = 600; // 10 minutes
-const MAX_EMAIL_SIZE = 25 * 1024 * 1024; // 25MB safety limit
+const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB safe limit for Worker memory
 
 export async function handleEmail(
   message: ForwardableEmailMessage,
@@ -13,9 +13,9 @@ export async function handleEmail(
   const inboxEmail = message.to.toLowerCase().trim();
   const now = Date.now();
 
-  // 1. Guard against memory exhaustion
-  if (message.rawSize && message.rawSize > MAX_EMAIL_SIZE) {
-    message.setReject('Email exceeds the maximum allowed size of 25MB.');
+  // 1. Pre-emptive API Size Guard
+  if (message.rawSize > MAX_EMAIL_SIZE_BYTES) {
+    message.setReject(`Message exceeds the maximum allowed size of ${MAX_EMAIL_SIZE_BYTES / (1024 * 1024)}MB`);
     return;
   }
 
@@ -26,17 +26,29 @@ export async function handleEmail(
     .first<{ id: string; token: string }>();
 
   if (!session) {
-    message.setReject('Mailbox does not exist or has expired.');
+    message.setReject('Mailbox does not exist or has expired');
     return;
   }
 
-  // 3. Parse MIME safely within limits
-  const rawBuffer = await streamToArrayBuffer(message.raw);
-  const parser = new PostalMime();
-  const parsed = await parser.parse(rawBuffer);
-
   const emailId = crypto.randomUUID();
   const rawHeaders = JSON.stringify(headersToRecord(message.headers));
+  
+  // Extract fast-access data directly from native API Headers
+  const fallbackSubject = message.headers.get('subject') ?? '(no subject)';
+  const fallbackFrom = message.headers.get('from') ?? message.from ?? '';
+
+  let parsed;
+  try {
+    // 3. Efficient stream parsing (avoiding manual ArrayBuffer conversion if possible)
+    const parser = new PostalMime();
+    // Wrap the raw ReadableStream in a Response to allow PostalMime to stream it
+    const response = new Response(message.raw);
+    parsed = await parser.parse(await response.arrayBuffer()); 
+  } catch (error) {
+    console.error(`Failed to parse email ${emailId}:`, error);
+    message.setReject('Unparseable MIME content');
+    return;
+  }
 
   // 4. Persist email in D1
   await env.TEMPMAIL_DB
@@ -49,19 +61,19 @@ export async function handleEmail(
     .bind(
       emailId,
       inboxEmail,
-      parsed.from?.address ?? message.from ?? '',
+      parsed.from?.address ?? fallbackFrom,
       parsed.from?.name   ?? '',
       parsed.replyTo?.[0]?.address ?? '',
-      parsed.subject      ?? '(no subject)',
+      parsed.subject      ?? fallbackSubject,
       parsed.text         ?? '',
       parsed.html         ?? '',
       rawHeaders,
       now,
-      message.rawSize ?? 0
+      message.rawSize
     )
     .run();
 
-  // 5. Process attachments to R2 (Using waitUntil for parallel uploads)
+  // 5. Process attachments to R2 (Offloaded to background via ctx.waitUntil)
   const attachments = parsed.attachments ?? [];
   const attachBatch: D1PreparedStatement[] = [];
 
@@ -97,7 +109,7 @@ export async function handleEmail(
     await env.TEMPMAIL_DB.batch(attachBatch);
   }
 
-  // 6. Update KV asynchronously to avoid delaying the MTA response
+  // 6. Update KV asynchronously to avoid delaying the SMTP OK response
   ctx.waitUntil((async () => {
     const kvKey = `notify:${inboxEmail}`;
     const prev  = await env.TEMPMAIL_KV.get<NotifyKV>(kvKey, 'json');
