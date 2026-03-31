@@ -1,7 +1,3 @@
-// ============================================================
-// cleanup.ts – Scheduled Cron job to purge expired data
-// ============================================================
-
 import type { Env } from './types';
 
 export async function handleScheduled(env: Env): Promise<void> {
