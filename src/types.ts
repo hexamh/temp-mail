@@ -1,7 +1,3 @@
-// ============================================================
-// types.ts – Shared types for TempMail Worker
-// ============================================================
-
 export interface Env {
   // D1 Database
   TEMPMAIL_DB: D1Database;
