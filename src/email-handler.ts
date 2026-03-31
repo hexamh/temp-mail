@@ -1,7 +1,3 @@
-// ============================================================
-// email-handler.ts – Parses and stores incoming emails
-// ============================================================
-
 import PostalMime from 'postal-mime';
 import type { Env, NotifyKV } from './types';
 import { streamToArrayBuffer, headersToRecord } from './utils';
