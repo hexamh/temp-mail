@@ -1,7 +1,3 @@
-// ============================================================
-// api.ts – REST API handler consumed by the Flutter app
-// ============================================================
-
 import type {
   Env, SessionRow, EmailRow, AttachmentRow,
   CreateInboxResponse, InboxResponse, EmailDetail,
