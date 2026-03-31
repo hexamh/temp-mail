@@ -1,7 +1,7 @@
-\<div align="center"\>
-\<h1\>✉️ TempMail Serverless API\</h1\>
-\<p\>A high-performance, fully serverless temporary email service built on Cloudflare's Edge infrastructure.\</p\>
-\</div\>
+<div align="center">
+<h1>✉️ TempMail Serverless API</h1>
+<p>A high-performance, fully serverless temporary email service built on Cloudflare's Edge infrastructure.</p>
+</div>
 
 ## 🚀 Overview
 
