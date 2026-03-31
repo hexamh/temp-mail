@@ -1,7 +1,3 @@
-// ============================================================
-// utils.ts – Shared utility helpers
-// ============================================================
-
 /** Generate a cryptographically-random alphanumeric string of given length */
 export function randomAlpha(length: number): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
