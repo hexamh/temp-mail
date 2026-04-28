@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler types && wrangler deploy",
+		"deploy": "wrangler d1 execute temp --file=./schema.sql --remote && wrangler types && wrangler deploy",
 		"start": "wrangler dev",
 		"dev": "wrangler dev",
 		"cf-typegen": "wrangler types"
