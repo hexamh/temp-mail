@@ -1,38 +1,25 @@
 name       = "tempmail"
 main       = "src/index.ts"
-account_id = "a4f1ce2376e901147e4ec2667d6dc094"
-
-# Workers compatibility
-compatibility_date  = "2026-03-16"
+compatibility_date  = "2026-04-29"
 compatibility_flags = ["nodejs_compat"]
 
-# ── Scheduled cleanup every 5 minutes ─────────────────────────
 [triggers]
+# Runs every 5 minutes to sweep expired D1 sessions (KV handles its own TTL natively)
 crons = ["*/5 * * * *"]
 
-# ── D1 Database ───────────────────────────────────────────────
 [[d1_databases]]
-binding      = "TEMPMAIL_DB"
+binding       = "TEMPMAIL_DB"
 database_name = "temp"
-database_id  = "85a32f88-865b-49a5-b18d-521c334ba38c"
+database_id   = "85a32f88-865b-49a5-b18d-521c334ba38c"
 
-# ── KV Namespace ──────────────────────────────────────────────
 [[kv_namespaces]]
 binding    = "TEMPMAIL_KV"
 id         = "305bed38102e467b9fd28b79c608b30e"
 preview_id = "305bed38102e467b9fd28b79c608b30e"
 
-# ── R2 Bucket ─────────────────────────────────────────────────
-[[r2_buckets]]
-binding     = "TEMPMAIL_ATTACHMENTS"
-bucket_name = "mail-storage"
-
-# ── Environment variables ─────────────────────────────────────
 [vars]
 ALLOWED_DOMAINS    = "mail.drkingbd.cc,drkingbd.cc"
 INBOX_TTL_SECONDS  = "600"              
 
-# 10 minutes
-# ── Production environment overrides ─────────────────────────
 [env.production]
 vars = { ALLOWED_DOMAINS = "mail.drkingbd.cc,drkingbd.cc", INBOX_TTL_SECONDS = "600" }
