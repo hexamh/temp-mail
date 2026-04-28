@@ -2,8 +2,9 @@ import PostalMime from 'postal-mime';
 import type { Env, NotifyKV } from './types';
 import { headersToRecord } from './utils';
 
-const TTL = 600; // 10 minutes
-const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB safe limit for Worker memory
+// Constants strictly mapped to edge performance limits
+const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB API Guard
+const DEFAULT_TTL = 600;
 
 export async function handleEmail(
   message: ForwardableEmailMessage,
@@ -13,17 +14,15 @@ export async function handleEmail(
   const inboxEmail = message.to.toLowerCase().trim();
   const now = Date.now();
 
-  // 1. Pre-emptive API Size Guard
   if (message.rawSize > MAX_EMAIL_SIZE_BYTES) {
     message.setReject(`Message exceeds the maximum allowed size of ${MAX_EMAIL_SIZE_BYTES / (1024 * 1024)}MB`);
     return;
   }
 
-  // 2. Verify active session
   const session = await env.TEMPMAIL_DB
-    .prepare('SELECT id, token FROM sessions WHERE email = ? AND expires_at > ?')
+    .prepare('SELECT id, token, expires_at FROM sessions WHERE email = ? AND expires_at > ?')
     .bind(inboxEmail, now)
-    .first<{ id: string; token: string }>();
+    .first<{ id: string; token: string; expires_at: number }>();
 
   if (!session) {
     message.setReject('Mailbox does not exist or has expired');
@@ -33,24 +32,20 @@ export async function handleEmail(
   const emailId = crypto.randomUUID();
   const rawHeaders = JSON.stringify(headersToRecord(message.headers));
   
-  // Extract fast-access data directly from native API Headers
   const fallbackSubject = message.headers.get('subject') ?? '(no subject)';
   const fallbackFrom = message.headers.get('from') ?? message.from ?? '';
 
   let parsed;
   try {
-    // 3. Efficient stream parsing (avoiding manual ArrayBuffer conversion if possible)
     const parser = new PostalMime();
-    // Wrap the raw ReadableStream in a Response to allow PostalMime to stream it
     const response = new Response(message.raw);
     parsed = await parser.parse(await response.arrayBuffer()); 
   } catch (error) {
-    console.error(`Failed to parse email ${emailId}:`, error);
+    console.error(`MIME parse failure for ${emailId}:`, error);
     message.setReject('Unparseable MIME content');
     return;
   }
 
-  // 4. Persist email in D1
   await env.TEMPMAIL_DB
     .prepare(`
       INSERT INTO emails
@@ -73,9 +68,11 @@ export async function handleEmail(
     )
     .run();
 
-  // 5. Process attachments to R2 (Offloaded to background via ctx.waitUntil)
   const attachments = parsed.attachments ?? [];
   const attachBatch: D1PreparedStatement[] = [];
+  
+  // Calculate exact TTL dynamically from session state to ensure synchronization
+  const ttlRemainingSeconds = Math.max(60, Math.ceil((session.expires_at - now) / 1000) + 60);
 
   for (const att of attachments) {
     if (!att.content || att.content.byteLength === 0) continue;
@@ -83,25 +80,20 @@ export async function handleEmail(
     const attId  = crypto.randomUUID();
     const fname  = att.filename ?? 'attachment';
     const mime   = att.mimeType ?? 'application/octet-stream';
-    const r2Key  = `attachments/${emailId}/${attId}/${fname}`;
+    const kvKey  = `attachment:${emailId}:${attId}`;
 
+    // Offload high-latency storage operations to background
     ctx.waitUntil(
-      env.TEMPMAIL_ATTACHMENTS.put(r2Key, att.content, {
-        httpMetadata: {
-          contentType: mime,
-          contentDisposition: `attachment; filename="${fname}"`,
-        },
-        customMetadata: { emailId, inboxEmail, filename: fname },
-      })
+      env.TEMPMAIL_KV.put(kvKey, att.content, { expirationTtl: ttlRemainingSeconds })
     );
 
     attachBatch.push(
       env.TEMPMAIL_DB
         .prepare(`
-          INSERT INTO attachments (id, email_id, filename, content_type, size, r2_key)
+          INSERT INTO attachments (id, email_id, filename, content_type, size, kv_key)
           VALUES (?, ?, ?, ?, ?, ?)
         `)
-        .bind(attId, emailId, fname, mime, att.content.byteLength, r2Key)
+        .bind(attId, emailId, fname, mime, att.content.byteLength, kvKey)
     );
   }
 
@@ -109,17 +101,16 @@ export async function handleEmail(
     await env.TEMPMAIL_DB.batch(attachBatch);
   }
 
-  // 6. Update KV asynchronously to avoid delaying the SMTP OK response
   ctx.waitUntil((async () => {
-    const kvKey = `notify:${inboxEmail}`;
-    const prev  = await env.TEMPMAIL_KV.get<NotifyKV>(kvKey, 'json');
+    const notifyKey = `notify:${inboxEmail}`;
+    const prev  = await env.TEMPMAIL_KV.get<NotifyKV>(notifyKey, 'json');
     const next: NotifyKV = {
       count:      (prev?.count ?? 0) + 1,
       last_id:    emailId,
       updated_at: now,
     };
-    await env.TEMPMAIL_KV.put(kvKey, JSON.stringify(next), {
-      expirationTtl: TTL + 60,
+    await env.TEMPMAIL_KV.put(notifyKey, JSON.stringify(next), {
+      expirationTtl: ttlRemainingSeconds,
     });
   })());
 }
