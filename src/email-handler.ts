@@ -2,8 +2,8 @@ import PostalMime from 'postal-mime';
 import type { Env, NotifyKV } from './types';
 import { headersToRecord } from './utils';
 
-const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB Memory Limit
-const KV_BLOB_TTL = 86400; // 24 Hours in seconds (ensures survivability during session extensions)
+const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB Memory Guard
+const KV_BLOB_TTL = 86400; // 24 Hours. Keeps KV blobs alive independent of session extensions
 
 export async function handleEmail(
   message: ForwardableEmailMessage,
@@ -36,7 +36,6 @@ export async function handleEmail(
   let parsed;
   try {
     const parser = new PostalMime();
-    // Using Response wrapper for standard cross-compatibility ingestion of stream to arraybuffer
     const response = new Response(message.raw);
     parsed = await parser.parse(await response.arrayBuffer()); 
   } catch (error) {
@@ -73,7 +72,6 @@ export async function handleEmail(
     const mime   = att.mimeType ?? 'application/octet-stream';
     const kvKey  = `attachment:${emailId}:${attId}`;
 
-    // Store physical blob for 24h. D1 handles logical access blocking.
     ctx.waitUntil(env.TEMPMAIL_KV.put(kvKey, att.content, { expirationTtl: KV_BLOB_TTL }));
 
     attachBatch.push(
@@ -84,7 +82,7 @@ export async function handleEmail(
   }
 
   if (attachBatch.length > 0) {
-    await env.TEMPMAIL_DB.batch(attachBatch).catch(e => console.error("Attachment metadata DB batch fail", e));
+    await env.TEMPMAIL_DB.batch(attachBatch).catch(e => console.error("Attachment batch failed", e));
   }
 
   ctx.waitUntil((async () => {
