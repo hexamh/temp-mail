@@ -33,11 +33,13 @@ export async function handleFetch(
   }
 
   try {
+    // 1. Static Routes (Faster & strictly matched)
     if (method === 'GET' && parsedUrl.pathname === '/') return getRootPromotion(request);
-    if (method === 'POST' && new URLPattern({ pathname: '/inbox/create' }).test(url)) return createInbox(request, env);
-    if (method === 'GET' && new URLPattern({ pathname: '/domains' }).test(url)) return getDomains(env);
-    if (method === 'GET' && new URLPattern({ pathname: '/health' }).test(url)) return jsonResponse({ ok: true, ts: Date.now() });
+    if (method === 'POST' && parsedUrl.pathname === '/inbox/create') return createInbox(request, env);
+    if (method === 'GET' && parsedUrl.pathname === '/domains') return getDomains(env);
+    if (method === 'GET' && parsedUrl.pathname === '/health') return jsonResponse({ ok: true, ts: Date.now() });
 
+    // 2. Dynamic Routes
     let match;
 
     if (method === 'GET' && (match = routes.attachment.exec(url))) {
@@ -47,10 +49,12 @@ export async function handleFetch(
       return await getEmail(request, match.pathname.groups.token!, match.pathname.groups.emailId!, env);
     }
     if (method === 'DELETE' && (match = routes.email.exec(url))) {
-      return await deleteEmail(match.pathname.groups.token!, match.pathname.groups.emailId!, env);
+      // FIX: Context explicitly passed
+      return await deleteEmail(match.pathname.groups.token!, match.pathname.groups.emailId!, env, ctx); 
     }
     if (method === 'GET' && (match = routes.stream.exec(url))) {
-      return await streamInbox(match.pathname.groups.token!, env);
+      // FIX: Context explicitly passed
+      return await streamInbox(match.pathname.groups.token!, env, ctx);
     }
     if (method === 'GET' && (match = routes.check.exec(url))) {
       return await checkInbox(match.pathname.groups.token!, env);
@@ -62,7 +66,8 @@ export async function handleFetch(
       return await getInbox(match.pathname.groups.token!, env);
     }
     if (method === 'DELETE' && (match = routes.inbox.exec(url))) {
-      return await deleteInbox(match.pathname.groups.token!, env);
+      // FIX: Context explicitly passed
+      return await deleteInbox(match.pathname.groups.token!, env, ctx);
     }
 
     return errorResponse('Not found', 404);
@@ -189,7 +194,8 @@ async function checkInbox(token: string, env: Env): Promise<Response> {
   });
 }
 
-async function streamInbox(token: string, env: Env): Promise<Response> {
+// FIX: Passed ExecutionContext to stream function
+async function streamInbox(token: string, env: Env, ctx: ExecutionContext): Promise<Response> {
   const session = await getSession(token, env);
   if (!session) return errorResponse('Inbox not found or expired', 404);
 
@@ -278,7 +284,8 @@ async function getAttachment(request: Request, token: string, attachId: string, 
   return response;
 }
 
-async function deleteEmail(token: string, emailId: string, env: Env): Promise<Response> {
+// FIX: Passed ExecutionContext to prevent crashes
+async function deleteEmail(token: string, emailId: string, env: Env, ctx: ExecutionContext): Promise<Response> {
   const session = await getSession(token, env);
   if (!session) return errorResponse('Inbox not found or expired', 404);
 
@@ -290,12 +297,31 @@ async function deleteEmail(token: string, emailId: string, env: Env): Promise<Re
   return jsonResponse({ success: true, deleted: emailId });
 }
 
-async function deleteInbox(token: string, env: Env): Promise<Response> {
+// FIX: Explicitly enforce D1 deep deletion (Do not trust SQLite pragmas on Edge)
+async function deleteInbox(token: string, env: Env, ctx: ExecutionContext): Promise<Response> {
   const session = await getSession(token, env);
   if (!session) return errorResponse('Inbox not found or expired', 404);
 
-  await env.TEMPMAIL_DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
-  await Promise.all([env.TEMPMAIL_KV.delete(`session:${token}`), env.TEMPMAIL_KV.delete(`notify:${session.email}`)]);
+  // 1. Fetch deep dependencies
+  const emails = await env.TEMPMAIL_DB.prepare('SELECT id FROM emails WHERE inbox_email = ?').bind(session.email).all<{id: string}>();
+  const emailIds = emails.results?.map(e => `'${e.id}'`).join(',') || "''";
+  const atts = await env.TEMPMAIL_DB.prepare(`SELECT kv_key FROM attachments WHERE email_id IN (${emailIds})`).all<{kv_key: string}>();
+
+  // 2. Batched Deterministic Sweep
+  await env.TEMPMAIL_DB.batch([
+    env.TEMPMAIL_DB.prepare(`DELETE FROM attachments WHERE email_id IN (${emailIds})`),
+    env.TEMPMAIL_DB.prepare('DELETE FROM emails WHERE inbox_email = ?').bind(session.email),
+    env.TEMPMAIL_DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token)
+  ]);
+
+  // 3. Purge KV State
+  await Promise.all([
+    env.TEMPMAIL_KV.delete(`session:${token}`),
+    env.TEMPMAIL_KV.delete(`notify:${session.email}`)
+  ]);
+
+  // 4. Background Blob Cleanup
+  atts.results?.forEach(att => ctx.waitUntil(env.TEMPMAIL_KV.delete(att.kv_key)));
 
   return jsonResponse({ success: true, deleted: session.email });
 }
