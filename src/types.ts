@@ -1,17 +1,9 @@
 export interface Env {
-  // D1 Database
   TEMPMAIL_DB: D1Database;
-  // KV Namespace (real-time polling & session store)
   TEMPMAIL_KV: KVNamespace;
-  // R2 Bucket (attachment storage)
-  TEMPMAIL_ATTACHMENTS: R2Bucket;
-  // Allowed domains (comma-separated)
-  ALLOWED_DOMAINS: string; // "drkingbd.cc,mail.drkingbd.cc"
-  // Inbox TTL in seconds (default 600 = 10 min)
+  ALLOWED_DOMAINS: string; 
   INBOX_TTL_SECONDS: string;
 }
-
-// ── KV schemas ────────────────────────────────────────────────
 
 export interface SessionKV {
   email: string;
@@ -26,8 +18,6 @@ export interface NotifyKV {
   last_id: string;
   updated_at: number;
 }
-
-// ── D1 row types ──────────────────────────────────────────────
 
 export interface SessionRow {
   id: string;
@@ -59,10 +49,8 @@ export interface AttachmentRow {
   filename: string;
   content_type: string;
   size: number;
-  r2_key: string;
+  kv_key: string;
 }
-
-// ── API response types ────────────────────────────────────────
 
 export interface CreateInboxResponse {
   success: true;
