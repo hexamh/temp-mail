@@ -2,9 +2,8 @@ import PostalMime from 'postal-mime';
 import type { Env, NotifyKV } from './types';
 import { headersToRecord } from './utils';
 
-// Constants strictly mapped to edge performance limits
-const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB API Guard
-const DEFAULT_TTL = 600;
+const MAX_EMAIL_SIZE_BYTES = 15 * 1024 * 1024; // 15MB Memory Limit
+const KV_BLOB_TTL = 86400; // 24 Hours in seconds (ensures survivability during session extensions)
 
 export async function handleEmail(
   message: ForwardableEmailMessage,
@@ -31,13 +30,13 @@ export async function handleEmail(
 
   const emailId = crypto.randomUUID();
   const rawHeaders = JSON.stringify(headersToRecord(message.headers));
-  
   const fallbackSubject = message.headers.get('subject') ?? '(no subject)';
   const fallbackFrom = message.headers.get('from') ?? message.from ?? '';
 
   let parsed;
   try {
     const parser = new PostalMime();
+    // Using Response wrapper for standard cross-compatibility ingestion of stream to arraybuffer
     const response = new Response(message.raw);
     parsed = await parser.parse(await response.arrayBuffer()); 
   } catch (error) {
@@ -46,34 +45,26 @@ export async function handleEmail(
     return;
   }
 
-  await env.TEMPMAIL_DB
-    .prepare(`
-      INSERT INTO emails
-        (id, inbox_email, from_address, from_name, reply_to,
-         subject, body_text, body_html, raw_headers, received_at, size)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    .bind(
-      emailId,
-      inboxEmail,
-      parsed.from?.address ?? fallbackFrom,
-      parsed.from?.name   ?? '',
-      parsed.replyTo?.[0]?.address ?? '',
-      parsed.subject      ?? fallbackSubject,
-      parsed.text         ?? '',
-      parsed.html         ?? '',
-      rawHeaders,
-      now,
-      message.rawSize
-    )
-    .run();
+  try {
+    await env.TEMPMAIL_DB
+      .prepare(`
+        INSERT INTO emails (id, inbox_email, from_address, from_name, reply_to, subject, body_text, body_html, raw_headers, received_at, size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .bind(
+        emailId, inboxEmail, parsed.from?.address ?? fallbackFrom, parsed.from?.name ?? '',
+        parsed.replyTo?.[0]?.address ?? '', parsed.subject ?? fallbackSubject,
+        parsed.text ?? '', parsed.html ?? '', rawHeaders, now, message.rawSize
+      )
+      .run();
+  } catch (e) {
+    console.error('Failed to insert email record', e);
+    return;
+  }
 
   const attachments = parsed.attachments ?? [];
   const attachBatch: D1PreparedStatement[] = [];
   
-  // Calculate exact TTL dynamically from session state to ensure synchronization
-  const ttlRemainingSeconds = Math.max(60, Math.ceil((session.expires_at - now) / 1000) + 60);
-
   for (const att of attachments) {
     if (!att.content || att.content.byteLength === 0) continue;
 
@@ -82,35 +73,27 @@ export async function handleEmail(
     const mime   = att.mimeType ?? 'application/octet-stream';
     const kvKey  = `attachment:${emailId}:${attId}`;
 
-    // Offload high-latency storage operations to background
-    ctx.waitUntil(
-      env.TEMPMAIL_KV.put(kvKey, att.content, { expirationTtl: ttlRemainingSeconds })
-    );
+    // Store physical blob for 24h. D1 handles logical access blocking.
+    ctx.waitUntil(env.TEMPMAIL_KV.put(kvKey, att.content, { expirationTtl: KV_BLOB_TTL }));
 
     attachBatch.push(
       env.TEMPMAIL_DB
-        .prepare(`
-          INSERT INTO attachments (id, email_id, filename, content_type, size, kv_key)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `)
+        .prepare(`INSERT INTO attachments (id, email_id, filename, content_type, size, kv_key) VALUES (?, ?, ?, ?, ?, ?)`)
         .bind(attId, emailId, fname, mime, att.content.byteLength, kvKey)
     );
   }
 
   if (attachBatch.length > 0) {
-    await env.TEMPMAIL_DB.batch(attachBatch);
+    await env.TEMPMAIL_DB.batch(attachBatch).catch(e => console.error("Attachment metadata DB batch fail", e));
   }
 
   ctx.waitUntil((async () => {
     const notifyKey = `notify:${inboxEmail}`;
     const prev  = await env.TEMPMAIL_KV.get<NotifyKV>(notifyKey, 'json');
-    const next: NotifyKV = {
-      count:      (prev?.count ?? 0) + 1,
-      last_id:    emailId,
-      updated_at: now,
-    };
-    await env.TEMPMAIL_KV.put(notifyKey, JSON.stringify(next), {
-      expirationTtl: ttlRemainingSeconds,
-    });
+    const ttlRemainingSeconds = Math.max(60, Math.ceil((session.expires_at - now) / 1000) + 60);
+    
+    await env.TEMPMAIL_KV.put(notifyKey, JSON.stringify({
+      count: (prev?.count ?? 0) + 1, last_id: emailId, updated_at: now,
+    }), { expirationTtl: ttlRemainingSeconds });
   })());
 }
