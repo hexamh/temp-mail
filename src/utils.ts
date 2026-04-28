@@ -5,10 +5,11 @@ export function randomAlpha(length: number): string {
   return Array.from(arr).map(b => chars[b % chars.length]).join('');
 }
 
+// FIX: Added 'Accept' to allowed headers for Content Negotiation
 export const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Token, Accept',
   'Access-Control-Max-Age': '86400',
 };
 
