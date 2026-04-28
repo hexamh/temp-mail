@@ -10,7 +10,6 @@ import {
 
 const DEFAULT_TTL = 600;
 
-// Native URLPatterns for high-performance edge routing
 const routes = {
   inbox: new URLPattern({ pathname: '/inbox/:token' }),
   check: new URLPattern({ pathname: '/inbox/:token/check' }),
@@ -34,9 +33,7 @@ export async function handleFetch(
   }
 
   try {
-    // Root Promotion Route
     if (method === 'GET' && parsedUrl.pathname === '/') return getRootPromotion(request);
-    
     if (method === 'POST' && new URLPattern({ pathname: '/inbox/create' }).test(url)) return createInbox(request, env);
     if (method === 'GET' && new URLPattern({ pathname: '/domains' }).test(url)) return getDomains(env);
     if (method === 'GET' && new URLPattern({ pathname: '/health' }).test(url)) return jsonResponse({ ok: true, ts: Date.now() });
@@ -75,13 +72,9 @@ export async function handleFetch(
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// GET /  →  Root Promotion (Content Negotiated)
-// ─────────────────────────────────────────────────────────────
 function getRootPromotion(request: Request): Response {
   const acceptHeader = request.headers.get('Accept') || '';
 
-  // Serve visually appealing HTML if accessed via a Browser
   if (acceptHeader.includes('text/html')) {
     const html = `
     <!DOCTYPE html>
@@ -113,16 +106,9 @@ function getRootPromotion(request: Request): Response {
     </body>
     </html>
     `;
-    return new Response(html, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/html;charset=UTF-8',
-        ...CORS_HEADERS
-      }
-    });
+    return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html;charset=UTF-8', ...CORS_HEADERS } });
   }
 
-  // Serve clean JSON if accessed via API Client (curl, postman, fetch)
   return jsonResponse({
     service: "TempMail Serverless API",
     status: "online",
@@ -133,33 +119,13 @@ function getRootPromotion(request: Request): Response {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Helper Functions
-// ─────────────────────────────────────────────────────────────
-
-function getTTL(env: Env): number {
-  return parseInt(env.INBOX_TTL_SECONDS ?? `${DEFAULT_TTL}`, 10) || DEFAULT_TTL;
-}
-
-function getAllowedDomains(env: Env): string[] {
-  return (env.ALLOWED_DOMAINS ?? 'mail.drkingbd.cc')
-    .split(',')
-    .map(d => d.trim())
-    .filter(Boolean);
-}
-
+function getTTL(env: Env): number { return parseInt(env.INBOX_TTL_SECONDS ?? `${DEFAULT_TTL}`, 10) || DEFAULT_TTL; }
+function getAllowedDomains(env: Env): string[] { return (env.ALLOWED_DOMAINS ?? 'mail.drkingbd.cc').split(',').map(d => d.trim()).filter(Boolean); }
 async function getSession(token: string, env: Env): Promise<SessionRow | null> {
   if (!token || token.length > 64) return null;
-  const session = await env.TEMPMAIL_DB
-    .prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > ?')
-    .bind(token, Date.now())
-    .first<SessionRow>();
+  const session = await env.TEMPMAIL_DB.prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > ?').bind(token, Date.now()).first<SessionRow>();
   return session ?? null;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Core Route Handlers
-// ─────────────────────────────────────────────────────────────
 
 async function createInbox(request: Request, env: Env): Promise<Response> {
   const allowed = getAllowedDomains(env);
@@ -169,10 +135,8 @@ async function createInbox(request: Request, env: Env): Promise<Response> {
   let domain = allowed[0]; 
   try {
     const body = await request.json<{ domain?: string }>();
-    if (body.domain && allowed.includes(body.domain)) {
-      domain = body.domain;
-    }
-  } catch { /* use default */ }
+    if (body.domain && allowed.includes(body.domain)) domain = body.domain;
+  } catch {}
 
   let email = '';
   for (let attempts = 0; attempts < 5; attempts++) {
@@ -187,18 +151,10 @@ async function createInbox(request: Request, env: Env): Promise<Response> {
   const token     = crypto.randomUUID();
   const expiresAt = now + ttl * 1000;
 
-  await env.TEMPMAIL_DB
-    .prepare(`INSERT INTO sessions (id, email, token, domain, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(id, email, token, domain, now, expiresAt)
-    .run();
+  await env.TEMPMAIL_DB.prepare(`INSERT INTO sessions (id, email, token, domain, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`).bind(id, email, token, domain, now, expiresAt).run();
+  await env.TEMPMAIL_KV.put(`session:${token}`, JSON.stringify({ email, token, domain, created_at: now, expires_at: expiresAt }), { expirationTtl: ttl + 60 });
 
-  await env.TEMPMAIL_KV.put(`session:${token}`, JSON.stringify({
-    email, token, domain, created_at: now, expires_at: expiresAt,
-  }), { expirationTtl: ttl + 60 });
-
-  return jsonResponse<CreateInboxResponse>({
-    success: true, token, email, domain, created_at: now, expires_at: expiresAt, ttl_seconds: ttl,
-  }, 201);
+  return jsonResponse<CreateInboxResponse>({ success: true, token, email, domain, created_at: now, expires_at: expiresAt, ttl_seconds: ttl }, 201);
 }
 
 async function getInbox(token: string, env: Env): Promise<Response> {
@@ -206,30 +162,18 @@ async function getInbox(token: string, env: Env): Promise<Response> {
   if (!session) return errorResponse('Inbox not found or expired', 404);
 
   const emailRows = await env.TEMPMAIL_DB
-    .prepare(`
-      SELECT e.*, (SELECT COUNT(*) FROM attachments a WHERE a.email_id = e.id) AS att_count
-      FROM emails e WHERE e.inbox_email = ? ORDER BY e.received_at DESC
-    `)
+    .prepare(`SELECT e.*, (SELECT COUNT(*) FROM attachments a WHERE a.email_id = e.id) AS att_count FROM emails e WHERE e.inbox_email = ? ORDER BY e.received_at DESC`)
     .bind(session.email)
     .all<EmailRow & { att_count: number }>();
 
   const emails: EmailSummary[] = (emailRows.results ?? []).map(row => ({
-    id:              row.id,
-    from_address:    row.from_address,
-    from_name:       row.from_name,
-    subject:         row.subject,
-    received_at:     row.received_at,
-    is_read:         row.is_read === 1,
-    size:            row.size,
-    has_attachments: row.att_count > 0,
-    snippet:         buildSnippet(row.body_text, row.body_html),
+    id: row.id, from_address: row.from_address, from_name: row.from_name, subject: row.subject,
+    received_at: row.received_at, is_read: row.is_read === 1, size: row.size, has_attachments: row.att_count > 0, snippet: buildSnippet(row.body_text, row.body_html),
   }));
 
   return jsonResponse<InboxResponse>({
-    success: true, token, email: session.email,
-    expires_at: session.expires_at,
-    ttl_remaining: Math.max(0, Math.floor((session.expires_at - Date.now()) / 1000)),
-    emails, total: emails.length,
+    success: true, token, email: session.email, expires_at: session.expires_at,
+    ttl_remaining: Math.max(0, Math.floor((session.expires_at - Date.now()) / 1000)), emails, total: emails.length,
   });
 }
 
@@ -240,9 +184,8 @@ async function checkInbox(token: string, env: Env): Promise<Response> {
   const notify = await env.TEMPMAIL_KV.get<{ count: number; last_id: string; updated_at: number; }>(`notify:${session.email}`, 'json');
 
   return jsonResponse<PollResponse>({
-    has_new: notify !== null, count: notify?.count ?? 0, last_id: notify?.last_id ?? null,
-    updated_at: notify?.updated_at ?? null, expires_at: session.expires_at,
-    ttl_remaining: Math.max(0, Math.floor((session.expires_at - Date.now()) / 1000)),
+    has_new: notify !== null, count: notify?.count ?? 0, last_id: notify?.last_id ?? null, updated_at: notify?.updated_at ?? null,
+    expires_at: session.expires_at, ttl_remaining: Math.max(0, Math.floor((session.expires_at - Date.now()) / 1000)),
   });
 }
 
@@ -254,9 +197,7 @@ async function streamInbox(token: string, env: Env): Promise<Response> {
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
 
-  const sendEvent = async (event: string, data: unknown) => {
-    await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-  };
+  const sendEvent = async (event: string, data: unknown) => { await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); };
 
   const kvKey = `notify:${session.email}`;
   let lastCount = (await env.TEMPMAIL_KV.get<{ count: number }>(kvKey, 'json'))?.count ?? 0;
@@ -267,17 +208,11 @@ async function streamInbox(token: string, env: Env): Promise<Response> {
   ctx.waitUntil((async () => {
     try {
       await sendEvent('connected', { email: session.email, expires_at: session.expires_at });
-
       while (Date.now() - start < MAX_DURATION_MS) {
         await new Promise(r => setTimeout(r, 2000));
-        if (Date.now() > session.expires_at) {
-          await sendEvent('expired', { message: 'Inbox expired' });
-          break;
-        }
-
+        if (Date.now() > session.expires_at) { await sendEvent('expired', { message: 'Inbox expired' }); break; }
         const notify = await env.TEMPMAIL_KV.get<{ count: number; last_id: string; updated_at: number; }>(kvKey, 'json');
         const newCount = notify?.count ?? 0;
-
         if (newCount > lastCount) {
           lastCount = newCount;
           await sendEvent('new_email', { count: newCount, last_id: notify!.last_id, updated_at: notify!.updated_at });
@@ -286,14 +221,10 @@ async function streamInbox(token: string, env: Env): Promise<Response> {
         }
       }
       await sendEvent('reconnect', { after_ms: 0 });
-    } catch (_) {} finally {
-      await writer.close();
-    }
+    } catch (_) {} finally { await writer.close(); }
   })());
 
-  return new Response(readable, {
-    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS },
-  });
+  return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS } });
 }
 
 async function getEmail(request: Request, token: string, emailId: string, env: Env): Promise<Response> {
@@ -313,15 +244,10 @@ async function getEmail(request: Request, token: string, emailId: string, env: E
   const baseUrl = `${urlParams.protocol}//${urlParams.host}`; 
 
   const attachments: AttachmentMeta[] = (attRows.results ?? []).map(a => ({
-    id: a.id, filename: a.filename, content_type: a.content_type, size: a.size,
-    download_url: `${baseUrl}/inbox/${token}/attachment/${a.id}`,
+    id: a.id, filename: a.filename, content_type: a.content_type, size: a.size, download_url: `${baseUrl}/inbox/${token}/attachment/${a.id}`,
   }));
 
-  return jsonResponse({
-    success: true, email: {
-      ...row, is_read: true, attachments
-    }
-  });
+  return jsonResponse({ success: true, email: { ...row, is_read: true, attachments } });
 }
 
 async function getAttachment(request: Request, token: string, attachId: string, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -335,11 +261,7 @@ async function getAttachment(request: Request, token: string, attachId: string, 
   const session = await getSession(token, env);
   if (!session) return errorResponse('Inbox not found or expired', 404);
 
-  const att = await env.TEMPMAIL_DB
-    .prepare(`SELECT a.* FROM attachments a JOIN emails e ON e.id = a.email_id WHERE a.id = ? AND e.inbox_email = ?`)
-    .bind(attachId, session.email)
-    .first<AttachmentRow>();
-
+  const att = await env.TEMPMAIL_DB.prepare(`SELECT a.* FROM attachments a JOIN emails e ON e.id = a.email_id WHERE a.id = ? AND e.inbox_email = ?`).bind(attachId, session.email).first<AttachmentRow>();
   if (!att) return errorResponse('Attachment not found', 404);
 
   const stream = await env.TEMPMAIL_KV.get(att.kv_key, 'stream');
@@ -364,7 +286,6 @@ async function deleteEmail(token: string, emailId: string, env: Env): Promise<Re
   const result = await env.TEMPMAIL_DB.prepare('DELETE FROM emails WHERE id = ? AND inbox_email = ?').bind(emailId, session.email).run();
 
   if (result.meta.changes === 0) return errorResponse('Email not found', 404);
-
   atts.results?.forEach(att => ctx.waitUntil(env.TEMPMAIL_KV.delete(att.kv_key)));
   return jsonResponse({ success: true, deleted: emailId });
 }
