@@ -27,12 +27,16 @@ export async function handleFetch(
 ): Promise<Response> {
   const method = request.method.toUpperCase();
   const url = request.url;
+  const parsedUrl = new URL(url);
 
   if (method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   try {
+    // Root Promotion Route
+    if (method === 'GET' && parsedUrl.pathname === '/') return getRootPromotion(request);
+    
     if (method === 'POST' && new URLPattern({ pathname: '/inbox/create' }).test(url)) return createInbox(request, env);
     if (method === 'GET' && new URLPattern({ pathname: '/domains' }).test(url)) return getDomains(env);
     if (method === 'GET' && new URLPattern({ pathname: '/health' }).test(url)) return jsonResponse({ ok: true, ts: Date.now() });
@@ -71,6 +75,68 @@ export async function handleFetch(
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// GET /  →  Root Promotion (Content Negotiated)
+// ─────────────────────────────────────────────────────────────
+function getRootPromotion(request: Request): Response {
+  const acceptHeader = request.headers.get('Accept') || '';
+
+  // Serve visually appealing HTML if accessed via a Browser
+  if (acceptHeader.includes('text/html')) {
+    const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>TempMail API - Serverless Edge</title>
+      <style>
+        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
+        .container { padding: 2rem; border-radius: 16px; background: #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; max-width: 600px; width: 90%; }
+        h1 { font-size: 2.2rem; margin-bottom: 0.5rem; background: -webkit-linear-gradient(45deg, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        p { font-size: 1.1rem; color: #94a3b8; line-height: 1.6; margin-bottom: 2rem; }
+        a.btn { display: inline-flex; align-items: center; gap: 8px; background: #3b82f6; color: white; padding: 12px 28px; border-radius: 9999px; text-decoration: none; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.39); }
+        a.btn:hover { background: #2563eb; transform: translateY(-2px); }
+        .footer { margin-top: 2rem; font-size: 0.85rem; color: #475569; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>✉️ TempMail API Server</h1>
+        <p>A high-performance, fully serverless temporary email service running globally on Cloudflare's Edge infrastructure.</p>
+        <a href="https://t.me/drkingbd" target="_blank" rel="noopener noreferrer" class="btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2L2 10.5l6.5 3 2.5 8.5 3.5-5.5 4.5 4.5L21.5 2z"/></svg>
+          Join our Telegram Channel
+        </a>
+        <div class="footer">Build reliable, disposable email workflows.</div>
+      </div>
+    </body>
+    </html>
+    `;
+    return new Response(html, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html;charset=UTF-8',
+        ...CORS_HEADERS
+      }
+    });
+  }
+
+  // Serve clean JSON if accessed via API Client (curl, postman, fetch)
+  return jsonResponse({
+    service: "TempMail Serverless API",
+    status: "online",
+    message: "Welcome to the edge-optimized temporary email API.",
+    promotion: "🚀 Join our Telegram community for updates, scripts, and support!",
+    telegram: "https://t.me/drkingbd",
+    docs_hint: "Send a POST to /inbox/create to get started."
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helper Functions
+// ─────────────────────────────────────────────────────────────
+
 function getTTL(env: Env): number {
   return parseInt(env.INBOX_TTL_SECONDS ?? `${DEFAULT_TTL}`, 10) || DEFAULT_TTL;
 }
@@ -90,6 +156,10 @@ async function getSession(token: string, env: Env): Promise<SessionRow | null> {
     .first<SessionRow>();
   return session ?? null;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Core Route Handlers
+// ─────────────────────────────────────────────────────────────
 
 async function createInbox(request: Request, env: Env): Promise<Response> {
   const allowed = getAllowedDomains(env);
